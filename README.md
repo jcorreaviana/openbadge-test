@@ -4,8 +4,9 @@ Prova de conceito offline de **Open Badges 3.0** e **CLR 2.0**: emissão,
 verificação e agrupamento de credenciais verificáveis em padrão aberto.
 
 Todos os dados são fictícios (`example.com`). Não há servidor, banco de dados
-nem interface, e nenhuma chave é gravada em disco: o par de chaves existe só
-em memória durante a execução.
+nem interface. No fluxo padrão (`EdDSA`) o par de chaves existe só em memória.
+Para `RS256` e `ES256` há uma chave de teste persistente, guardada **fora** do
+repositório (ver [Chave de teste persistente](#chave-de-teste-persistente)).
 
 ## Os padrões
 
@@ -16,7 +17,7 @@ com a chave pública do emissor verifica o badge sem consultar o emissor. A
 especificação aceita duas formas de prova:
 
 - **JWT-VC**: o badge vai no payload de um JWT compacto, assinado aqui com `EdDSA`
-  (Ed25519).
+  (Ed25519, padrão), `RS256` (RSA 2048) ou `ES256` (P-256).
 - **Data Integrity**: o badge é um documento JSON-LD com uma prova embutida
   (`eddsa-rdfc-2022`), calculada sobre a forma canônica RDF do documento.
 
@@ -26,7 +27,9 @@ tem sua própria assinatura, e cada badge dentro dele continua sendo um document
 assinado por si só.
 
 O emissor é identificado por um **`did:key`**, derivado da própria chave
-pública, então resolver o DID devolve a chave sem acesso à rede.
+pública, então resolver o DID devolve a chave sem acesso à rede. O `did:key`
+só aceita Ed25519 e P-256; por isso, em `RS256` o emissor é identificado pela
+URL fictícia `https://example.com/issuers/escola-exemplo`.
 
 ## Instalação e uso
 
@@ -34,21 +37,56 @@ pública, então resolver o DID devolve a chave sem acesso à rede.
 python3.14 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-.venv/bin/python -m src.demo   # fluxo completo; sai com código 1 se alguma fraude passar
-.venv/bin/pytest               # testes, incluindo os negativos
+.venv/bin/python -m src.demo                  # fluxo completo; código 1 se alguma fraude passar
+.venv/bin/python -m src.demo --alg RS256      # badges JWT-VC em RS256 (também: ES256)
+.venv/bin/python -m src.export --alg RS256    # grava out/badge_rs256.jwt e o verifica
+.venv/bin/python -m src.inspect out/badge_rs256.jwt   # mostra cabeçalho e conteúdo
+.venv/bin/pytest                              # testes, incluindo os negativos
 ```
 
-O demo grava `out/badge1.jwt` e `out/clr.json` (a pasta `out/` não vai para o git).
+O demo grava `out/badge1.jwt` e `out/clr.json`, e o export grava
+`out/badge_<alg>.jwt` (a pasta `out/` não vai para o git).
+
+- **`--alg`** (`demo` e `export`): `EdDSA` (padrão do demo), `RS256` (padrão do
+  export) ou `ES256`. Vale só para os badges JWT-VC: os badges Data Integrity e o
+  CLR usam `eddsa-rdfc-2022`, que exige Ed25519.
+- **`src.export`** emite um badge fictício, grava o arquivo, imprime o caminho e
+  um resumo de uma linha (algoritmo e emissor) e depois relê o arquivo e o
+  verifica com `OB3Verifier` e a chave pública do emissor.
+- **`src.inspect`** decodifica o JWT e imprime cabeçalho e conteúdo formatados,
+  mais um resumo (algoritmo, como a chave é referenciada, emissor, destinatário).
+  **Não verifica a assinatura.**
+
+## Chave de teste persistente
+
+Com `RS256` e `ES256`, a chave vem de `src/keystore.py`:
+
+- Local: `~/.openbadge-test/keys/` (`rsa_private.pem`, `ec_private.pem`), ou a
+  pasta indicada em `OPENBADGE_TEST_KEYDIR`.
+- É criada na primeira execução e reutilizada nas seguintes, então o emissor e a
+  chave pública ficam estáveis entre execuções.
+- Pasta com permissão `700` e chave privada com `600`. Se a chave tiver
+  permissões mais abertas, o programa se recusa a usá-la.
+- O programa se recusa a usar uma pasta dentro do repositório, e um teste
+  garante que nenhum arquivo de chave está em `git ls-files`.
+- A chave privada nunca é impressa.
+
+> **Aviso:** esta chave é **só para teste**, com dados fictícios. Nunca a reutilize
+> para emitir credenciais reais. Para descartá-la, apague `~/.openbadge-test/`.
 
 ## Estrutura e o que cada etapa demonstra
 
 | Arquivo | O que demonstra |
 | --- | --- |
-| `src/keys.py` | Gera um par Ed25519 em memória e deriva o `did:key`. O *verification method* segue o formato `did#fragmento`, onde o fragmento é o próprio identificador multibase (`did:key:z6Mk…#z6Mk…`). |
+| `src/keys.py` | Gera um par Ed25519 em memória e deriva o `did:key`. O *verification method* segue o formato `did#fragmento`, onde o fragmento é o próprio identificador multibase (`did:key:z6Mk…#z6Mk…`). Também define o identificador do emissor de cada algoritmo JWT. |
+| `src/keystore.py` | Chave de teste RSA/P-256 persistente, fora do repositório. |
 | `src/issue.py` | Um emissor (Escola Exemplo), duas conquistas e uma destinatária fictícios. Emite cada badge como JWT-VC e como Data Integrity, e monta o CLR com os badges Data Integrity dentro, assinado com `sign_clr_credential`. No CLR, a destinatária aparece só como hash SHA-256 de `e-mail + salt` (`IdentityObject`). |
 | `src/verify.py` | Verifica badges com `OB3Verifier` / `OB3LdpVerifier`, fixando a chave pública do emissor e o destinatário esperado. Verifica o CLR (ver abaixo). Toda falha lança `OB3VerificationError`. |
 | `src/demo.py` | Roda o fluxo inteiro, imprime cada etapa, tenta 7 fraudes e confere que todas foram rejeitadas. |
-| `tests/test_flow.py` | Emissão, verificação e os casos negativos. |
+| `src/export.py` | Grava um badge JWT-VC em `out/badge_<alg>.jwt` e o verifica localmente. |
+| `src/inspect.py` | Decodifica um JWT sem verificar a assinatura. |
+| `tests/test_flow.py` | Emissão, verificação e os casos negativos (EdDSA, Data Integrity e CLR). |
+| `tests/test_algorithms.py` | RS256/ES256, keystore, export/inspect e ausência de chaves no git. |
 
 ### Fraudes testadas
 
@@ -93,12 +131,64 @@ maiúsculas). **O formato fixado no código é com prefixo:
 `test_expected_recipient_with_and_without_mailto` garante que a forma sem prefixo
 continua equivalente.
 
+## Validar com um verificador externo
+
+Objetivo: submeter um badge ao validador público de Open Badges 3.0 da 1EdTech.
+
+> **Status:** o resultado do validador **ainda não foi registrado**. A ideia de
+> que ele recusa `EdDSA` e aceita `RS256` vem de uma fonte de terceiros e
+> **não foi confirmada**.
+
+1. Gere o badge e confira que ele é verificado localmente:
+
+   ```bash
+   .venv/bin/python -m src.export --alg RS256
+   ```
+
+   A última linha deve ser `verificado localmente com OB3Verifier (chave pública keystore)`.
+2. Inspecione o que será enviado:
+
+   ```bash
+   .venv/bin/python -m src.inspect out/badge_rs256.jwt
+   ```
+
+3. Abra o validador e envie `out/badge_rs256.jwt` como arquivo, ou cole o
+   conteúdo dele (uma linha, o JWT compacto `xxxxx.yyyyy.zzzzz`).
+4. Anote o resultado aqui: data, versão do validador, algoritmo e mensagens de
+   erro ou aviso. Se `RS256` passar, vale repetir com `--alg EdDSA` e
+   `--alg ES256` para confirmar ou descartar a hipótese.
+
+### Como o badge referencia a chave pública
+
+Conferido com `src.inspect` em um badge `RS256` gerado:
+
+- O cabeçalho tem só `alg`, `typ` e **`jwk`**: a chave pública RSA completa
+  (`kty`, `n`, `e`) vai embutida no token. Não há `kid`, `jku`, `x5c` nem `x5u`.
+- O `jwk` é a mesma chave pública do keystore, e não traz parâmetros privados.
+- `iss` e `issuer.id` são `https://example.com/issuers/escola-exemplo`, uma URL
+  fictícia que não publica nenhum perfil, DID ou JWKS.
+
+O que isso significa para um validador externo:
+
+- **Para checar a assinatura**, basta o `jwk` do próprio cabeçalho, sem rede.
+- **Para ligar a chave ao emissor**, o token não oferece nada que dê para
+  resolver: não há `kid` apontando para um documento, e a URL do emissor não
+  existe. Se o validador exigir buscar a chave ou o perfil do emissor (por `kid`,
+  JWKS ou `issuer.id`), o badge vai falhar **independentemente do algoritmo**.
+  Para passar nesse caso, seria preciso publicar o perfil do emissor e a chave
+  em uma URL real, o que está fora do escopo desta prova de conceito.
+- Localmente, a verificação usa a chave fixada do keystore e **ignora** o `jwk`
+  do cabeçalho. Um teste confirma que um token assinado por outra chave, com essa
+  outra chave no `jwk`, é rejeitado.
+
 ## Limitações
 
-- Chaves efêmeras: cada execução gera um emissor novo. Não há como verificar,
-  numa execução futura, um badge salvo em `out/`.
+- No fluxo `EdDSA`, as chaves são efêmeras: cada execução gera um emissor novo, e
+  um badge salvo em `out/` não pode ser verificado numa execução futura. Em
+  `RS256`/`ES256` a chave do keystore é estável.
 - `did:key` prova que a assinatura bate com a chave, não quem é o dono da chave.
-  Aqui a confiança vem de o verificador receber a chave pública diretamente.
+  Aqui a confiança vem de o verificador receber a chave pública diretamente. O
+  emissor `RS256` em URL fictícia também não tem nada que o ligue à chave.
 - Os badges trazem o e-mail em texto claro em `credentialSubject.id`; só o CLR
   usa o e-mail com hash.
 - Sem revogação (`verify_status_list=False`, nenhum `credentialStatus`).

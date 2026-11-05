@@ -13,6 +13,9 @@ keystore (``~/.openbadge-test/keys/``):
   desreferenciada, devolve um JWK);
 - ``jwks.json``: a mesma chave em um JWK Set (RFC 7517 §5);
 - ``did.json``: documento ``did:web`` com a mesma chave (``JsonWebKey2020``).
+
+Também emite badges com ``kid`` (``KidSigner``) e os verifica lendo só esses
+arquivos (``verify_hosted``), sem usar o keystore.
 """
 
 import argparse
@@ -23,10 +26,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import jwt
 from openbadgeslib.keys import public_jwk_from_pem
-from openbadgeslib.ob3 import Issuer, build_did_document, did_web_from_url
+from openbadgeslib.ob3 import (Achievement, Issuer, OB3Signer, OB3VerificationError,
+                               OpenBadgeCredential, build_did_document,
+                               did_web_from_url, resolve_verification_method)
+from openbadgeslib.ob3.did import _jwk_to_pem  # mesma conversão usada no did:web
 
+from .issue import RECIPIENT_ID
 from .keystore import PROJECT_ROOT
+from .verify import verify_jwt
 
 DEFAULT_BASE_URL = "https://jcorreaviana.github.io/openbadge-test"
 BASE_URL_ENV = "OPENBADGE_BASE_URL"
@@ -145,6 +154,123 @@ def write_site(site: Site, public_pem: bytes, docs_dir: Path = DOCS_DIR) -> list
                         encoding="utf-8")
         paths.append(path)
     return paths
+
+
+# ── emissão com kid ──────────────────────────────────────────────────────────
+
+class KidSigner(OB3Signer):
+    """``OB3Signer`` com cabeçalho ``{"kid": ...}`` no lugar do ``jwk``.
+
+    A biblioteca fixa o cabeçalho em ``{"jwk": ...}`` (``sign_payload``) e não
+    aceita campos extras. Aqui só o cabeçalho muda: payload, chave e algoritmo
+    são os mesmos do ``OB3Signer``. Sem o ``jwk``, quem verifica é obrigado a
+    buscar a chave pelo ``kid``, que é o que se quer testar.
+    """
+
+    def __init__(self, privkey_pem: Any, kid: str, algorithm: str = "RS256") -> None:
+        super().__init__(privkey_pem, algorithm=algorithm)
+        self.kid = kid
+
+    def sign_payload(self, payload: dict[str, Any]) -> str:
+        return jwt.encode(payload, self._load_privkey(), algorithm=self.algorithm,
+                          headers={"kid": self.kid})
+
+
+def issue_hosted(site: Site, private_pem: bytes, achievement: Achievement) -> str:
+    credential = OpenBadgeCredential(issuer=hosted_issuer(site),
+                                     recipient_id=RECIPIENT_ID, achievement=achievement)
+    return KidSigner(private_pem, kid=site.key_url).sign(credential)
+
+
+# ── verificação só com os arquivos publicados ────────────────────────────────
+
+def local_path(site: Site, url: str, docs_dir: Path = DOCS_DIR) -> Path:
+    """Arquivo de ``docs_dir`` que será servido em ``url``.
+
+    Só aceita URLs do próprio site, sem query, fragmento ou ``..``: o ``kid``
+    vem do token, que não é confiável antes da verificação.
+    """
+    prefix = site.base_url + "/"
+    if not url.startswith(prefix) or any(c in url for c in "?#\\"):
+        raise OB3VerificationError(f"URL fora do site publicado: {url!r}")
+    relative = url[len(prefix):]
+    if not relative or any(part in ("", ".", "..") for part in relative.split("/")):
+        raise OB3VerificationError(f"caminho inválido no site publicado: {url!r}")
+    base = docs_dir.resolve()
+    path = (base / relative).resolve()
+    if base not in path.parents:
+        raise OB3VerificationError(f"caminho fora de docs/: {url!r}")
+    return path
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise OB3VerificationError(f"não consegui ler {path.name}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise OB3VerificationError(f"{path.name} não é um objeto JSON")
+    return value
+
+
+def _rsa_public(jwk: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return jwk.get("kty"), jwk.get("n"), jwk.get("e")
+
+
+def verify_hosted(token: str, site: Site, expected_recipient: str,
+                  docs_dir: Path = DOCS_DIR) -> OpenBadgeCredential:
+    """Verifica um badge hospedado usando SÓ os arquivos de ``docs_dir``.
+
+    Faz o caminho que um validador externo faria pela rede, trocando cada GET
+    pela leitura do arquivo que o GitHub Pages vai servir naquela URL:
+
+    1. o ``kid`` do cabeçalho é desreferenciado para um JWK (``issuer-key.json``);
+    2. o JWKS publicado precisa conter a mesma chave sob o mesmo ``kid``;
+    3. o ``did.json`` publicado, resolvido pela própria biblioteca, também;
+    4. a assinatura é verificada com essa chave (``OB3Verifier``);
+    5. o ``issuer.id`` do badge precisa ser o ``id`` do perfil publicado.
+    """
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.exceptions.InvalidTokenError as exc:
+        raise OB3VerificationError(f"JWT inválido: {exc}") from exc
+    kid = header.get("kid")
+    if not isinstance(kid, str):
+        raise OB3VerificationError("o cabeçalho não tem kid")
+
+    # 1. kid -> JWK publicado
+    jwk = _read_json(local_path(site, kid, docs_dir))
+    leaked = find_private_members(jwk)
+    if leaked:
+        raise OB3VerificationError(f"JWK publicado tem campos privados: {leaked}")
+    if jwk.get("kid") != kid:
+        raise OB3VerificationError("o JWK publicado não declara o kid do token")
+    public_pem = _jwk_to_pem(jwk)
+
+    # 2. JWKS
+    jwks = _read_json(local_path(site, site.jwks_url, docs_dir))
+    if not any(isinstance(k, dict) and k.get("kid") == kid
+               and _rsa_public(k) == _rsa_public(jwk) for k in jwks.get("keys", [])):
+        raise OB3VerificationError("o JWKS publicado não contém a chave do kid")
+
+    # 3. did:web, resolvido pela biblioteca com "download" lendo de docs/
+    def fetch(url: str) -> bytes:
+        return local_path(site, url, docs_dir).read_bytes()
+    if resolve_verification_method(site.did_verification_method, download=fetch) != public_pem:
+        raise OB3VerificationError("o did.json publicado não contém a chave do kid")
+
+    # 4. assinatura, validade e destinatário
+    credential = verify_jwt(token, public_pem, expected_recipient)
+
+    # 5. vínculo com o perfil publicado
+    profile = _read_json(local_path(site, site.profile_url, docs_dir))
+    if "Profile" not in (profile.get("type") or []):
+        raise OB3VerificationError("o perfil publicado não é do tipo Profile")
+    if profile.get("id") != site.profile_url or credential.issuer.id != profile["id"]:
+        raise OB3VerificationError(
+            f"issuer.id {credential.issuer.id!r} não é o perfil publicado "
+            f"{profile.get('id')!r}")
+    return credential
 
 
 def main(argv: list[str] | None = None) -> int:

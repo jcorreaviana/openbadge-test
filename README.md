@@ -231,11 +231,41 @@ Não prova que o arquivo que alguém mostra é essa mesma imagem.
 
 Objetivo: submeter um badge ao validador público de Open Badges 3.0 da 1EdTech.
 
-> **Status:** primeira submissão feita em 2026-11-05 (ver
-> [Emissor hospedado](#emissor-hospedado)): resultado fatal no
-> `ExternalProofProbe`, "JWT Invalid signature ... SHA256withRSA". A causa
-> provável é o `\n` no fim do arquivo, que já foi removido. A correção **ainda
-> não foi testada** no validador.
+### Resultado registrado
+
+| | |
+| --- | --- |
+| Validador | Validador público de Open Badges 3.0 da 1EdTech (OB30Inspector). A versão não foi registrada. |
+| Data | 2026-11-05 |
+| Arquivo | `out/badge_rs256.jwt`, gerado por `src.export --alg RS256` depois da correção do `\n` |
+| Badge | `RS256`, chave pública RSA embutida no `jwk` do cabeçalho, sem `kid`; emissor `https://example.com/issuers/escola-exemplo`, sem nada publicado |
+| Resultado | **VALID**: 13 verificações, 0 fatais, 0 erros, 0 avisos, 0 exceções |
+
+Antes disso, no mesmo dia, o mesmo tipo de badge tinha recebido um resultado
+fatal no `ExternalProofProbe` ("JWT Invalid signature ... SHA256withRSA"). A
+causa era a **quebra de linha no fim do arquivo**, que o validador lia como parte
+da assinatura (diagnóstico em [Emissor hospedado](#emissor-hospedado)). A
+correção, gravar o JWT sem `\n` final, está no `src.export` e no `src.demo`. Entre
+os dois envios, essa foi a única mudança que afeta o conteúdo do badge `RS256`
+comum (o `export` também foi reorganizado para o `--hosted`, sem mudar esse
+badge), e a chave do keystore era a mesma.
+
+**O que esse resultado prova:** o validador aceita a estrutura do badge (as 13
+verificações dele) e a assinatura confere com a chave pública **embutida no
+próprio token** (`jwk`).
+
+**O que ele não prova:**
+
+- que a chave do `jwk` pertence ao emissor declarado. Quem tiver qualquer par de
+  chaves pode assinar um token, embutir a própria chave pública no `jwk` e passar
+  na mesma verificação, porque o emissor `example.com` não publica nada que o
+  ligue à chave;
+- que o emissor existe ou é confiável.
+
+**O que não foi testado no validador:** badge `EdDSA`, badge `ES256`, badge com
+`kid` hospedado (`export --hosted`) e badge baked em SVG.
+
+### Como submeter
 
 1. Gere o badge e confira que ele é verificado localmente:
 
@@ -252,9 +282,8 @@ Objetivo: submeter um badge ao validador público de Open Badges 3.0 da 1EdTech.
 
 3. Abra o validador e envie `out/badge_rs256.jwt` como arquivo, ou cole o
    conteúdo dele (uma linha, o JWT compacto `xxxxx.yyyyy.zzzzz`).
-4. Anote o resultado aqui: data, versão do validador, algoritmo e mensagens de
-   erro ou aviso. Se `RS256` passar, vale repetir com `--alg EdDSA` e
-   `--alg ES256` para confirmar ou descartar a hipótese.
+4. Anote o resultado em [Resultado registrado](#resultado-registrado): data,
+   versão do validador, algoritmo e mensagens de erro ou aviso.
 
 ### Como o badge referencia a chave pública
 
@@ -271,10 +300,10 @@ O que isso significa para um validador externo:
 - **Para checar a assinatura**, basta o `jwk` do próprio cabeçalho, sem rede.
 - **Para ligar a chave ao emissor**, o token não oferece nada que dê para
   resolver: não há `kid` apontando para um documento, e a URL do emissor não
-  existe. Se o validador exigir buscar a chave ou o perfil do emissor (por `kid`,
-  JWKS ou `issuer.id`), o badge vai falhar **independentemente do algoritmo**.
-  Para esse caso, o perfil e a chave são publicados em uma URL real (ver
-  [Emissor hospedado](#emissor-hospedado)).
+  existe. O validador da 1EdTech **não exigiu** buscar a chave nem o perfil: o
+  badge passou só com o `jwk` (ver [Resultado registrado](#resultado-registrado)).
+  Para ligar a chave a um emissor real, o perfil e a chave são publicados em uma
+  URL (ver [Emissor hospedado](#emissor-hospedado)).
 - Localmente, a verificação usa a chave fixada do keystore e **ignora** o `jwk`
   do cabeçalho. Um teste confirma que um token assinado por outra chave, com essa
   outra chave no `jwk`, é rejeitado.
@@ -313,6 +342,10 @@ usa. O validador **não foi executado** localmente (não há JDK aqui).
 
 Correção: `export` e `demo` gravam o JWT sem `\n` final, e o `export` verifica o
 arquivo exatamente como foi gravado. Um teste cobre isso.
+
+Depois da correção, o `out/badge_rs256.jwt` (chave no `jwk`) foi reenviado e o
+resultado foi **VALID**, o que confirma o diagnóstico (ver
+[Resultado registrado](#resultado-registrado)).
 
 ### Badge hospedado
 
@@ -365,15 +398,13 @@ qualquer campo privado (`d`, `p`, `q`, `dp`, `dq`, `qi`).
    curl -fsS https://jcorreaviana.github.io/openbadge-test/did.json
    ```
 
-5. Envie ao validador, nesta ordem, para separar as causas:
-   1. `out/badge_rs256.jwt` (regravado sem `\n`, chave no `jwk`): testa só a
-      correção do `\n`, sem depender do site.
-   2. `out/badge_rs256_hosted.jwt` (chave pelo `kid`): testa a busca da chave
-      publicada.
-6. Registre aqui a data e o resultado de cada um.
+5. Envie `out/badge_rs256_hosted.jwt` (chave pelo `kid`) ao validador. Isso
+   testa a busca da chave publicada.
+6. Registre aqui a data e o resultado.
 
-> **Status:** **ainda não testado** no validador. Nem a correção do `\n` nem o
-> badge hospedado foram submetidos.
+> **Status:** a correção do `\n` já foi testada no validador, com o badge de
+> chave no `jwk` (**VALID**). O badge hospedado (`--hosted`) **ainda não foi
+> testado** no validador, e o GitHub Pages ainda não foi ativado.
 
 ## Limitações
 

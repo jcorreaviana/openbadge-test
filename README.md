@@ -40,6 +40,8 @@ python3.14 -m venv .venv
 .venv/bin/python -m src.demo                  # fluxo completo; código 1 se alguma fraude passar
 .venv/bin/python -m src.demo --alg RS256      # badges JWT-VC em RS256 (também: ES256)
 .venv/bin/python -m src.export --alg RS256    # grava out/badge_rs256.jwt e o verifica
+.venv/bin/python -m src.hosting               # gera docs/ (perfil e chave pública do emissor)
+.venv/bin/python -m src.export --alg RS256 --hosted  # out/badge_rs256_hosted.jwt, verificado por docs/
 .venv/bin/python -m src.inspect out/badge_rs256.jwt   # mostra cabeçalho e conteúdo
 .venv/bin/python -m src.visual                # badge baked em SVG + out/preview.html
 .venv/bin/python -m src.experiment            # altera o desenho do badge baked e reverifica
@@ -88,6 +90,8 @@ Com `RS256` e `ES256`, a chave vem de `src/keystore.py`:
 | `src/demo.py` | Roda o fluxo inteiro, imprime cada etapa, tenta 7 fraudes e confere que todas foram rejeitadas. |
 | `src/export.py` | Grava um badge JWT-VC em `out/badge_<alg>.jwt` e o verifica localmente. |
 | `src/inspect.py` | Decodifica um JWT sem verificar a assinatura. |
+| `src/hosting.py` | Gera o site do emissor em `docs/`, assina badges com `kid` e os verifica só com os arquivos publicados. |
+| `docs/` | Site estático para o GitHub Pages: perfil do emissor, chave pública (JWK e JWKS) e `did.json`. |
 | `assets/` | Artes fictícias em SVG: logo do emissor e selo da conquista. |
 | `src/images.py` | Emissor e conquista com as artes como `data:` URI. |
 | `src/baked.py` | Embute a credencial assinada no SVG da conquista e a extrai e verifica. |
@@ -96,6 +100,7 @@ Com `RS256` e `ES256`, a chave vem de `src/keystore.py`:
 | `tests/test_flow.py` | Emissão, verificação e os casos negativos (EdDSA, Data Integrity e CLR). |
 | `tests/test_algorithms.py` | RS256/ES256, keystore, export/inspect e ausência de chaves no git. |
 | `tests/test_visual.py` | Artes, badge baked, experimento e preview. |
+| `tests/test_hosting.py` | Site do emissor, ausência de campos privados em `docs/`, verificação a partir dos arquivos publicados e casos negativos. |
 
 ### Fraudes testadas
 
@@ -226,9 +231,11 @@ Não prova que o arquivo que alguém mostra é essa mesma imagem.
 
 Objetivo: submeter um badge ao validador público de Open Badges 3.0 da 1EdTech.
 
-> **Status:** o resultado do validador **ainda não foi registrado**. A ideia de
-> que ele recusa `EdDSA` e aceita `RS256` vem de uma fonte de terceiros e
-> **não foi confirmada**.
+> **Status:** primeira submissão feita em 2026-11-05 (ver
+> [Emissor hospedado](#emissor-hospedado)): resultado fatal no
+> `ExternalProofProbe`, "JWT Invalid signature ... SHA256withRSA". A causa
+> provável é o `\n` no fim do arquivo, que já foi removido. A correção **ainda
+> não foi testada** no validador.
 
 1. Gere o badge e confira que ele é verificado localmente:
 
@@ -266,11 +273,107 @@ O que isso significa para um validador externo:
   resolver: não há `kid` apontando para um documento, e a URL do emissor não
   existe. Se o validador exigir buscar a chave ou o perfil do emissor (por `kid`,
   JWKS ou `issuer.id`), o badge vai falhar **independentemente do algoritmo**.
-  Para passar nesse caso, seria preciso publicar o perfil do emissor e a chave
-  em uma URL real, o que está fora do escopo desta prova de conceito.
+  Para esse caso, o perfil e a chave são publicados em uma URL real (ver
+  [Emissor hospedado](#emissor-hospedado)).
 - Localmente, a verificação usa a chave fixada do keystore e **ignora** o `jwk`
   do cabeçalho. Um teste confirma que um token assinado por outra chave, com essa
   outra chave no `jwk`, é rejeitado.
+
+## Emissor hospedado
+
+### O que o validador acusou
+
+Em 2026-11-05, `out/badge_rs256.jwt` e `out/badge1.jwt` foram enviados ao
+validador público de Open Badges 3.0 da 1EdTech (OB30Inspector). Os dois
+relatórios foram idênticos: 13 verificações, nenhum erro ou aviso e um único
+resultado fatal, do `ExternalProofProbe`:
+
+```
+Error verifying jwt signature: JWT Invalid signature. Reason: The Token's
+Signature resulted invalid when verified using the Algorithm: SHA256withRSA
+```
+
+Diagnóstico, feito lendo o código público do validador
+(`1EdTech/digital-credentials-public-validator`) e do `java-jwt` 3.19.2 que ele
+usa. O validador **não foi executado** localmente (não há JDK aqui).
+
+- O `ExternalProofProbe` aceita só `alg` `RS256` ou `ES256` e checa isso
+  **antes** de usar a chave. Um token `EdDSA` seria recusado com outra mensagem
+  ("alg must be present..."). Então o `badge1.jwt` enviado deve ter sido gerado
+  com `demo --alg RS256`. O `badge1.jwt` local atual é `EdDSA`, mas foi regravado
+  depois do envio, então isso não dá para confirmar.
+- Com `jwk` no cabeçalho, o validador monta a chave RSA a partir de `n` e `e`.
+  O `jwk` dos nossos badges é a mesma chave do keystore (conferido).
+- O validador guarda o **conteúdo bruto do arquivo** como JWT, sem `trim`. Os
+  arquivos terminavam com `\n`, que entrava no segmento da assinatura. O
+  `Base64.getUrlDecoder()` do Java recusa o `\n`, e o `RSAAlgorithm.verify` do
+  `java-jwt` converte esse erro exatamente na mensagem acima.
+- Localmente, o PyJWT também rejeita o arquivo com o `\n` ("Invalid crypto
+  padding"). O `export` só passava porque verificava `read_text().strip()`.
+
+Correção: `export` e `demo` gravam o JWT sem `\n` final, e o `export` verifica o
+arquivo exatamente como foi gravado. Um teste cobre isso.
+
+### Badge hospedado
+
+Para o caso de o validador também precisar buscar a chave do emissor, há um
+segundo badge cuja chave é publicada no GitHub Pages:
+
+- `docs/issuer.json`: perfil do emissor (`Profile` OB 3.0 em JSON-LD), com `id`
+  igual à própria URL.
+- `docs/issuer-key.json`: a chave pública como **um JWK**. É o alvo do `kid`. A
+  especificação OB 3.0 (§8.2.3) define o `kid` como uma URI que, ao ser
+  desreferenciada, devolve um JWK, e o validador lê a resposta como um JWK (não
+  como um JWKS).
+- `docs/jwks.json`: a mesma chave em um JWK Set.
+- `docs/did.json`: `did:web:jcorreaviana.github.io:openbadge-test` com a mesma
+  chave (`JsonWebKey2020`). O `did:key` não aceita RSA, mas o `did:web` aceita,
+  e a resolução foi testada com a própria biblioteca. O badge não usa o
+  `did.json`; ele está publicado só como alternativa.
+
+O `out/badge_rs256_hosted.jwt` tem cabeçalho `{"alg": "RS256", "kid":
+".../issuer-key.json", "typ": "JWT"}`, **sem `jwk`**, e `iss` = `issuer.id` =
+`.../issuer.json`. O `export --hosted` verifica o badge **só com os arquivos de
+`docs/`**, sem o keystore: `kid` → JWK, a chave tem que estar no JWKS e no
+`did.json`, a assinatura é conferida e o `issuer.id` tem que ser o `id` do perfil.
+
+A URL base é `https://jcorreaviana.github.io/openbadge-test`. Para trocá-la, use
+`--base-url` ou `OPENBADGE_BASE_URL` (no `src.hosting` e no `export --hosted`).
+Os arquivos de `docs/` contêm só a chave pública, e um teste falha se aparecer
+qualquer campo privado (`d`, `p`, `q`, `dp`, `dq`, `qi`).
+
+### Passo a passo
+
+1. Gere o site e o badge, e confira a verificação a partir de `docs/`:
+
+   ```bash
+   .venv/bin/python -m src.hosting
+   .venv/bin/python -m src.export --alg RS256 --hosted
+   ```
+
+   A última linha deve começar com `verificado a partir de .../docs/`. Se a chave
+   do keystore mudar, rode o `src.hosting` de novo e versione o novo `docs/`.
+2. Faça o push da `main` com a pasta `docs/`.
+3. No GitHub, em **Settings → Pages**, escolha **Source: Deploy from a branch**,
+   **Branch: `main`**, pasta **`/docs`**, e salve.
+4. Espere o deploy (aba **Actions**, workflow *pages build and deployment*) e
+   confira que os arquivos respondem:
+
+   ```bash
+   curl -fsS https://jcorreaviana.github.io/openbadge-test/issuer-key.json
+   curl -fsS https://jcorreaviana.github.io/openbadge-test/issuer.json
+   curl -fsS https://jcorreaviana.github.io/openbadge-test/did.json
+   ```
+
+5. Envie ao validador, nesta ordem, para separar as causas:
+   1. `out/badge_rs256.jwt` (regravado sem `\n`, chave no `jwk`): testa só a
+      correção do `\n`, sem depender do site.
+   2. `out/badge_rs256_hosted.jwt` (chave pelo `kid`): testa a busca da chave
+      publicada.
+6. Registre aqui a data e o resultado de cada um.
+
+> **Status:** **ainda não testado** no validador. Nem a correção do `\n` nem o
+> badge hospedado foram submetidos.
 
 ## Limitações
 
@@ -279,7 +382,9 @@ O que isso significa para um validador externo:
   `RS256`/`ES256` a chave do keystore é estável.
 - `did:key` prova que a assinatura bate com a chave, não quem é o dono da chave.
   Aqui a confiança vem de o verificador receber a chave pública diretamente. O
-  emissor `RS256` em URL fictícia também não tem nada que o ligue à chave.
+  emissor `RS256` em URL fictícia também não tem nada que o ligue à chave. O
+  emissor hospedado liga a chave ao perfil só por estarem no mesmo site
+  (confiança em DNS e TLS do GitHub Pages).
 - Os badges trazem o e-mail em texto claro em `credentialSubject.id`; só o CLR
   usa o e-mail com hash.
 - Sem revogação (`verify_status_list=False`, nenhum `credentialStatus`).

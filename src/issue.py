@@ -13,7 +13,7 @@ from openbadgeslib.ob3 import (Achievement, IdentityObject, Issuer,
                                OB3LdpSigner, OB3Signer, OpenBadgeCredential,
                                build_clr_credential, sign_clr_credential)
 
-from .keys import IssuerKeys
+from .keys import IssuerKeys, JwtKey, jwt_key_from_pems
 
 RECIPIENT_EMAIL = "ana.souza@example.com"
 # Formato fixado após testar com e sem o prefixo (ver README).
@@ -22,9 +22,11 @@ RECIPIENT_ID = f"mailto:{RECIPIENT_EMAIL}"
 
 @dataclass
 class IssuedSet:
-    issuer: Issuer
+    issuer: Issuer                # emissor Ed25519 (Data Integrity e CLR)
     achievements: list[Achievement]
-    jwts: list[str]               # um JWT-VC (EdDSA) por conquista
+    jwt_key: JwtKey               # chave e algoritmo dos JWT-VC
+    jwt_issuer: Issuer            # emissor dos JWT-VC
+    jwts: list[str]               # um JWT-VC por conquista
     ldp_docs: list[dict[str, Any]]  # mesmas conquistas com Data Integrity
     clr: dict[str, Any]           # ClrCredential assinado, com ldp_docs dentro
     salt: str                     # salt usado no hash do e-mail
@@ -35,8 +37,8 @@ def hash_email(email: str, salt: str) -> str:
     return "sha256$" + hashlib.sha256((email + salt).encode()).hexdigest()
 
 
-def build_issuer(keys: IssuerKeys) -> Issuer:
-    return Issuer(id=keys.did, name="Escola Exemplo",
+def build_issuer(issuer_id: str) -> Issuer:
+    return Issuer(id=issuer_id, name="Escola Exemplo",
                   url="https://example.com", email="contato@example.com")
 
 
@@ -64,8 +66,17 @@ def build_credential(issuer: Issuer, achievement: Achievement) -> OpenBadgeCrede
                                achievement=achievement)
 
 
-def issue_jwt(keys: IssuerKeys, credential: OpenBadgeCredential) -> str:
-    return OB3Signer(keys.private_pem, algorithm="EdDSA").sign(credential)
+def jwt_key_for(alg: str, keys: IssuerKeys) -> JwtKey:
+    """EdDSA usa o par Ed25519 em memória; RS256 e ES256 usam o keystore."""
+    if alg == "EdDSA":
+        return jwt_key_from_pems(alg, keys.private_pem, keys.public_pem)
+    from .keystore import load_or_create
+    stored = load_or_create({"RS256": "rsa", "ES256": "ec"}[alg])
+    return jwt_key_from_pems(alg, stored.private_pem, stored.public_pem)
+
+
+def issue_jwt(key: JwtKey, credential: OpenBadgeCredential) -> str:
+    return OB3Signer(key.private_pem, algorithm=key.alg).sign(credential)
 
 
 def issue_ldp(keys: IssuerKeys, credential: OpenBadgeCredential) -> dict[str, Any]:
@@ -88,15 +99,17 @@ def issue_clr(keys: IssuerKeys, issuer: Issuer, members: list[dict[str, Any]],
                                keys.verification_method)
 
 
-def issue_all(keys: IssuerKeys) -> IssuedSet:
-    issuer = build_issuer(keys)
+def issue_all(keys: IssuerKeys, alg: str = "EdDSA") -> IssuedSet:
+    issuer = build_issuer(keys.did)
+    jwt_key = jwt_key_for(alg, keys)
+    jwt_issuer = issuer if alg == "EdDSA" else build_issuer(jwt_key.issuer_id)
     achievements = build_achievements()
     jwts, ldp_docs = [], []
     for achievement in achievements:
-        credential = build_credential(issuer, achievement)
-        jwts.append(issue_jwt(keys, credential))
+        jwts.append(issue_jwt(jwt_key, build_credential(jwt_issuer, achievement)))
         # Credencial nova (outro id) para a versão Data Integrity.
         ldp_docs.append(issue_ldp(keys, build_credential(issuer, achievement)))
     salt = secrets.token_hex(16)
     clr = issue_clr(keys, issuer, ldp_docs, salt)
-    return IssuedSet(issuer, achievements, jwts, ldp_docs, clr, salt)
+    return IssuedSet(issuer, achievements, jwt_key, jwt_issuer, jwts,
+                     ldp_docs, clr, salt)

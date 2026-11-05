@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 ENV_VAR = "OPENBADGE_TEST_KEYDIR"
 DEFAULT_DIR = Path.home() / ".openbadge-test" / "keys"
@@ -43,7 +43,11 @@ def _generate_rsa() -> rsa.RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-_GENERATORS = {"rsa": _generate_rsa}
+def _generate_ec() -> ec.EllipticCurvePrivateKey:
+    return ec.generate_private_key(ec.SECP256R1())  # P-256, para ES256
+
+
+_GENERATORS = {"rsa": _generate_rsa, "ec": _generate_ec}
 
 
 def load_or_create(kind: str = "rsa") -> StoredKeys:

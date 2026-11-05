@@ -3,6 +3,7 @@
 Uso: ``python -m src.demo``. Sai com código 1 se alguma fraude for aceita.
 """
 
+import argparse
 import base64
 import copy
 import json
@@ -15,7 +16,7 @@ from openbadgeslib.ob3 import (OB3Signer, OB3VerificationError,
 
 from .issue import (RECIPIENT_EMAIL, RECIPIENT_ID, build_credential,
                     issue_all)
-from .keys import generate_keys
+from .keys import ALGORITHMS, ephemeral_jwt_key, generate_keys
 from .verify import verify_clr, verify_jwt, verify_ldp
 
 OUT_DIR = Path("out")
@@ -45,16 +46,24 @@ def tamper_jwt_payload(token: str, new_name: str) -> str:
     return f"{header}.{forged}.{signature}"
 
 
-def main() -> int:
-    step("1. Chaves em memória")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--alg", choices=ALGORITHMS, default="EdDSA",
+                        help="algoritmo dos badges JWT-VC (padrão: EdDSA)")
+    alg = parser.parse_args(argv).alg
+
+    step("1. Chaves")
     keys = generate_keys()
     attacker = generate_keys()
     print(f"  emissor:  {keys.did}")
     print(f"  vm:       {keys.verification_method}")
     print(f"  atacante: {attacker.did}")
 
-    step("2. Emissão")
-    issued = issue_all(keys)
+    step(f"2. Emissão (JWT-VC em {alg})")
+    issued = issue_all(keys, alg)
+    jwt_key = issued.jwt_key
+    if alg != "EdDSA":
+        print(f"  emissor dos JWT-VC ({alg}, keystore): {jwt_key.issuer_id}")
     for achievement, token in zip(issued.achievements, issued.jwts):
         print(f"  JWT-VC  '{achievement.name}': {token[:40]}... ({len(token)} bytes)")
     for doc in issued.ldp_docs:
@@ -65,22 +74,23 @@ def main() -> int:
 
     step("3. Verificação dos badges")
     for token in issued.jwts:
-        credential = verify_jwt(token, keys.public_pem, RECIPIENT_ID)
+        credential = verify_jwt(token, jwt_key.public_pem, RECIPIENT_ID)
         print(f"  [ok] JWT-VC '{credential.achievement.name}' para {credential.recipient_id}")
     for doc in issued.ldp_docs:
         credential = verify_ldp(doc, keys.public_pem, RECIPIENT_ID)
         print(f"  [ok] DI     '{credential.achievement.name}' para {credential.recipient_id}")
 
     step("4. Tentativas de fraude nos badges")
-    forged_by_attacker = OB3Signer(attacker.private_pem, algorithm="EdDSA").sign(
-        build_credential(issued.issuer, issued.achievements[0]))
+    jwt_attacker = ephemeral_jwt_key(alg)
+    forged_by_attacker = OB3Signer(jwt_attacker.private_pem, algorithm=alg).sign(
+        build_credential(issued.jwt_issuer, issued.achievements[0]))
     results = [
         expect_rejected("token adulterado (nome da conquista)", lambda: verify_jwt(
-            tamper_jwt_payload(issued.jwts[0], "Doutorado"), keys.public_pem, RECIPIENT_ID)),
+            tamper_jwt_payload(issued.jwts[0], "Doutorado"), jwt_key.public_pem, RECIPIENT_ID)),
         expect_rejected("badge assinado com a chave de outro emissor", lambda: verify_jwt(
-            forged_by_attacker, keys.public_pem, RECIPIENT_ID)),
+            forged_by_attacker, jwt_key.public_pem, RECIPIENT_ID)),
         expect_rejected("badge apresentado por outro destinatário", lambda: verify_jwt(
-            issued.jwts[0], keys.public_pem, "mailto:outra@example.com")),
+            issued.jwts[0], jwt_key.public_pem, "mailto:outra@example.com")),
     ]
 
     step("5. Verificação do CLR")

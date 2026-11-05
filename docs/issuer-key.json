@@ -1,0 +1,8 @@
+{
+  "kty": "RSA",
+  "n": "yek4uCpMc_jw2UC2cwosDh37SPJAh-pPjnPE1EEXARXjf0xH504mFmjaGfaGCxUSx23KCqfc6bFzMiukIAdfKXQ_SWx-i7re3NwftfqKIvGr7WiP0wBy-TuJRP2HNeU9TnBR_Ecv-k6EU2VE3LaHYi6E96AS9ylXGMp1CpgxtaDUB6HVPwd1VNtOAlmdhVLZcS-8SZ9vKc20aBHYCvF0g0xJ7eZJja1bI_h80V16vjaDdnto0J8k_Z9oYo_jvQt_-Pkij-reOnpUVwNEY5QBOSjegJsnODFHy7gtm-FhDiUqtpncF6P8FgfsgsVnptLtSjsE6-gVFQ3P5S3TzgA9gw",
+  "e": "AQAB",
+  "alg": "RS256",
+  "use": "sig",
+  "kid": "https://jcorreaviana.github.io/openbadge-test/issuer-key.json"
+}

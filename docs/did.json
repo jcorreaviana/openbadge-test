@@ -1,0 +1,24 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/jws-2020/v1"
+  ],
+  "id": "did:web:jcorreaviana.github.io:openbadge-test",
+  "verificationMethod": [
+    {
+      "id": "did:web:jcorreaviana.github.io:openbadge-test#key-1",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:jcorreaviana.github.io:openbadge-test",
+      "publicKeyJwk": {
+        "kty": "RSA",
+        "n": "yek4uCpMc_jw2UC2cwosDh37SPJAh-pPjnPE1EEXARXjf0xH504mFmjaGfaGCxUSx23KCqfc6bFzMiukIAdfKXQ_SWx-i7re3NwftfqKIvGr7WiP0wBy-TuJRP2HNeU9TnBR_Ecv-k6EU2VE3LaHYi6E96AS9ylXGMp1CpgxtaDUB6HVPwd1VNtOAlmdhVLZcS-8SZ9vKc20aBHYCvF0g0xJ7eZJja1bI_h80V16vjaDdnto0J8k_Z9oYo_jvQt_-Pkij-reOnpUVwNEY5QBOSjegJsnODFHy7gtm-FhDiUqtpncF6P8FgfsgsVnptLtSjsE6-gVFQ3P5S3TzgA9gw",
+        "e": "AQAB",
+        "alg": "RS256",
+        "use": "sig"
+      }
+    }
+  ],
+  "assertionMethod": [
+    "did:web:jcorreaviana.github.io:openbadge-test#key-1"
+  ]
+}

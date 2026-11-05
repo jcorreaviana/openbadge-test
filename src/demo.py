@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
 
     step("7. Arquivos gerados")
     OUT_DIR.mkdir(exist_ok=True)
-    (OUT_DIR / "badge1.jwt").write_text(issued.jwts[0] + "\n")
+    (OUT_DIR / "badge1.jwt").write_text(issued.jwts[0])  # sem "\n" final
     (OUT_DIR / "clr.json").write_text(
         json.dumps(issued.clr, indent=2, ensure_ascii=False) + "\n")
     print(f"  {OUT_DIR / 'badge1.jwt'}")

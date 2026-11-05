@@ -4,7 +4,7 @@ Uso: ``python -m src.export --alg RS256``. Com RS256 ou ES256 a chave vem do
 keystore de teste (``src/keystore.py``), então o mesmo emissor é reutilizado
 entre execuções. Com EdDSA a chave é efêmera, só em memória.
 
-Depois de gravar, relê o arquivo e verifica com ``OB3Verifier`` usando a
+Depois de gravar, relê o arquivo exatamente como gravado (sem ``strip``) e verifica com ``OB3Verifier`` usando a
 chave pública do emissor; sai com código 1 se a verificação falhar.
 """
 
@@ -35,14 +35,16 @@ def main(argv: list[str] | None = None) -> int:
 
     OUT_DIR.mkdir(exist_ok=True)
     path = OUT_DIR / f"badge_{alg.lower()}.jwt"
-    path.write_text(token + "\n")
+    # Sem "\n" final: validadores que não fazem strip leem o "\n" como parte
+    # da assinatura e a rejeitam (o java-jwt do validador da 1EdTech, o PyJWT).
+    path.write_text(token)
 
     print(path)
     print(f"alg={alg} emissor={key.issuer_id} "
           f"conquista='{credential.achievement.name}' id={credential.id}")
 
     try:
-        verify_jwt(path.read_text().strip(), key.public_pem, RECIPIENT_ID)
+        verify_jwt(path.read_text(), key.public_pem, RECIPIENT_ID)
     except OB3VerificationError as exc:
         print(f"FALHA na verificação local: {exc}", file=sys.stderr)
         return 1

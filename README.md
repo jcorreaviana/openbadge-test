@@ -41,11 +41,14 @@ python3.14 -m venv .venv
 .venv/bin/python -m src.demo --alg RS256      # badges JWT-VC em RS256 (também: ES256)
 .venv/bin/python -m src.export --alg RS256    # grava out/badge_rs256.jwt e o verifica
 .venv/bin/python -m src.inspect out/badge_rs256.jwt   # mostra cabeçalho e conteúdo
+.venv/bin/python -m src.visual                # badge baked em SVG + out/preview.html
+.venv/bin/python -m src.experiment            # altera o desenho do badge baked e reverifica
 .venv/bin/pytest                              # testes, incluindo os negativos
 ```
 
-O demo grava `out/badge1.jwt` e `out/clr.json`, e o export grava
-`out/badge_<alg>.jwt` (a pasta `out/` não vai para o git).
+O demo grava `out/badge1.jwt` e `out/clr.json`, o export grava
+`out/badge_<alg>.jwt` e o visual grava `out/badge_baked.svg` e
+`out/preview.html` (a pasta `out/` não vai para o git).
 
 - **`--alg`** (`demo` e `export`): `EdDSA` (padrão do demo), `RS256` (padrão do
   export) ou `ES256`. Vale só para os badges JWT-VC: os badges Data Integrity e o
@@ -85,8 +88,14 @@ Com `RS256` e `ES256`, a chave vem de `src/keystore.py`:
 | `src/demo.py` | Roda o fluxo inteiro, imprime cada etapa, tenta 7 fraudes e confere que todas foram rejeitadas. |
 | `src/export.py` | Grava um badge JWT-VC em `out/badge_<alg>.jwt` e o verifica localmente. |
 | `src/inspect.py` | Decodifica um JWT sem verificar a assinatura. |
+| `assets/` | Artes fictícias em SVG: logo do emissor e selo da conquista. |
+| `src/images.py` | Emissor e conquista com as artes como `data:` URI. |
+| `src/baked.py` | Embute a credencial assinada no SVG da conquista e a extrai e verifica. |
+| `src/experiment.py` | Altera o desenho do badge baked para ver o que a assinatura cobre. |
+| `src/visual.py` | Gera o badge baked e o `out/preview.html`. |
 | `tests/test_flow.py` | Emissão, verificação e os casos negativos (EdDSA, Data Integrity e CLR). |
 | `tests/test_algorithms.py` | RS256/ES256, keystore, export/inspect e ausência de chaves no git. |
+| `tests/test_visual.py` | Artes, badge baked, experimento e preview. |
 
 ### Fraudes testadas
 
@@ -132,6 +141,60 @@ maiúsculas). **O formato fixado no código é com prefixo:
 continua equivalente.
 
 ## Aparência do badge
+
+Uma referência visual de como o badge chega a quem o recebe. Tudo é fictício e
+offline.
+
+```bash
+.venv/bin/python -m src.visual     # padrão RS256 com a chave do keystore; --alg ES256 ou EdDSA
+open out/preview.html              # macOS; em outros sistemas, abra o arquivo no navegador
+```
+
+### Imagens
+
+`assets/` tem duas artes originais em SVG, de 512x512, feitas só com formas
+geométricas e texto, sem fontes externas nem imagens embutidas:
+
+- `issuer-logo.svg`: quadrado com as iniciais "EE" da Escola Exemplo.
+- `achievement-python-basico.svg`: selo circular com fitas e o nome da conquista.
+
+As duas vão **dentro da credencial**, nos campos `issuer.image.id` e
+`achievement.image.id`, como `data:image/svg+xml;base64,...`. As URLs de
+`example.com` não existem, então foi testado se a biblioteca aceita `data:`
+URI: aceita, em JWT-VC (RS256 e EdDSA) e em Data Integrity, e a imagem volta
+idêntica depois da verificação. O custo é o tamanho: o token RS256 passa de
+cerca de 2,7 KB para 5,9 KB. O fluxo do `demo` não mudou e continua sem imagens.
+
+### Badge baked
+
+Um badge *baked* é a imagem do badge com a credencial assinada dentro do
+próprio arquivo. `src.visual` usa `sign_into_svg` para pôr o JWT-VC em um
+elemento `<openbadges:credential verify="…"/>`, no namespace
+`https://purl.imsglobal.org/ob/v3p0`, ao final do SVG da conquista, e grava
+`out/badge_baked.svg`. Depois lê o arquivo de volta, extrai o token com
+`extract_token_from_svg` e o verifica com `OB3Verifier`. O navegador ignora o
+elemento extra, então o SVG continua abrindo como uma imagem normal.
+
+A chave e o algoritmo são os do `export`: RS256 com a chave do keystore por
+padrão, então o badge salvo pode ser verificado de novo em outra execução.
+
+### Preview em HTML
+
+`out/preview.html` é uma página única e autocontida: sem JavaScript, sem
+acesso à rede (uma Content-Security-Policy bloqueia tudo que não for imagem
+`data:` e CSS embutido) e com as imagens embutidas. Ela mostra dois cartões:
+
+- **Verificado:** desenho da conquista, logo do emissor, nome, descrição,
+  critério, destinatário e status, com data e hora da verificação, que o Python
+  fez ao gerar a página. Os dados e as imagens vêm da **credencial verificada**,
+  não do desenho do arquivo (ver o experimento abaixo).
+- **Adulterado: rejeitado:** um badge com o nome da conquista trocado para
+  "Doutorado Honoris" no token e no desenho. A verificação falha com
+  `Invalid signature`, e o cartão mostra o que o badge *alega*, riscado e
+  marcado como não confiável.
+
+A data e hora são as da geração da página. Abrir o HTML depois não verifica
+nada de novo: para atualizar, rode `src.visual` outra vez.
 
 ### Experimento: o que a assinatura cobre
 
@@ -225,3 +288,6 @@ O que isso significa para um validador externo:
   biblioteca alerta que a prova Data Integrity cobre o grafo RDF, não o JSON
   literal. Os membros passam pela validação completa do `OB3LdpVerifier`, mas o
   envelope não tem uma validação equivalente de forma JSON-LD.
+- Parte visual: só SVG baked (PNG baked não foi feito), só JWT-VC baked (não
+  Data Integrity), e o desenho do arquivo não é coberto pela assinatura. O
+  status do preview é uma foto do momento em que a página foi gerada.

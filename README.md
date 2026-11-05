@@ -131,6 +131,34 @@ maiúsculas). **O formato fixado no código é com prefixo:
 `test_expected_recipient_with_and_without_mailto` garante que a forma sem prefixo
 continua equivalente.
 
+## Aparência do badge
+
+### Experimento: o que a assinatura cobre
+
+`python -m src.experiment` altera o **desenho** de `out/badge_baked.svg` sem
+tocar no elemento `<openbadges:credential verify="…"/>` e verifica de novo.
+Resultado observado com `openbadgeslib` 4.6.3, em RS256:
+
+| Alteração | Verificação |
+| --- | --- |
+| Nenhuma (original) | passa |
+| Cor do selo (verde → vermelho) e texto visível ("Python Básico" → "Doutorado Honoris") | **passa** |
+| Elemento da credencial copiado para outro SVG (o logo do emissor) | **passa** |
+| Controle: 1 caractere do token alterado | rejeitada (`Invalid signature`) |
+
+**O que isso significa:** a assinatura cobre só o token JWT-VC, ou seja, os
+dados da credencial. O desenho do SVG é apenas o envelope que carrega o token,
+e qualquer um pode redesenhá-lo sem invalidar nada. Um badge baked que diz
+"Doutorado" na imagem pode carregar, validamente, uma credencial de "Python
+Básico".
+
+Por isso, quem exibe ou confere um badge deve confiar no **conteúdo verificado**
+(nome, descrição, critério, emissor e destinatário) e não no desenho do arquivo.
+Aqui, a imagem da conquista também viaja **dentro** da credencial, como
+`data:` URI assinado, e é essa imagem que o preview mostra, não o desenho do
+arquivo. Mesmo assim, ela só prova qual imagem o emissor associou à conquista.
+Não prova que o arquivo que alguém mostra é essa mesma imagem.
+
 ## Validar com um verificador externo
 
 Objetivo: submeter um badge ao validador público de Open Badges 3.0 da 1EdTech.
